@@ -26,7 +26,7 @@ def computeFairness(y_pred, X_test, y_test, metric, dataset):
         numProtected = len(protected_idx)
         privileged_idx = X_test[X_test['RAC1P']==1].index
         numPrivileged = len(privileged_idx)
-    elif dataset == 'public_coverage':
+    elif dataset == 'public':
         protected_idx = X_test[X_test['SEX']==0].index
         numProtected = len(protected_idx)
         privileged_idx = X_test[X_test['SEX']==1].index
@@ -126,7 +126,7 @@ def del_spd_del_theta(model, X_test_orig, X_test, dataset):
     elif dataset == 'employment':
         numPrivileged = X_test_orig['RAC1P'].sum()
         numProtected = len(X_test_orig) - numPrivileged
-    elif dataset == 'public_coverage':
+    elif dataset == 'public':
         numPrivileged = X_test_orig['SEX'].sum()
         numProtected = len(X_test_orig) - numPrivileged
     elif dataset == 'mobility':
@@ -152,7 +152,7 @@ def del_spd_del_theta(model, X_test_orig, X_test, dataset):
                 del_f_privileged += del_f_i_arr
             elif X_test_orig.iloc[i]['RAC1P'] == 0:
                 del_f_protected += del_f_i_arr
-        elif dataset == 'public_coverage':
+        elif dataset == 'public':
             if X_test_orig.iloc[i]['SEX'] == 1: #privileged
                 del_f_privileged += del_f_i_arr
             elif X_test_orig.iloc[i]['SEX'] == 0:
@@ -204,7 +204,7 @@ def del_tpr_parity_del_theta(model, X_test_orig, X_test, y_test, dataset):
         numProtected = len(protected_idx)
         privileged_idx = X_test_orig[X_test_orig['RAC1P']==1].index
         numPrivileged = len(privileged_idx)
-    elif dataset == 'public_coverage':
+    elif dataset == 'public':
         protected_idx = X_test_orig[X_test_orig['SEX']==0].index
         numProtected = len(protected_idx)
         privileged_idx = X_test_orig[X_test_orig['SEX']==1].index
@@ -263,7 +263,7 @@ def del_predictive_parity_del_theta(model, X_test_orig, X_test, y_test, dataset)
         numProtected = len(protected_idx)
         privileged_idx = X_test_orig[X_test_orig['RAC1P']==1].index
         numPrivileged = len(privileged_idx)
-    elif dataset == 'public_coverage':
+    elif dataset == 'public':
         protected_idx = X_test_orig[X_test_orig['SEX']==0].index
         numProtected = len(protected_idx)
         privileged_idx = X_test_orig[X_test_orig['SEX']==1].index

@@ -15,9 +15,9 @@ def load_acs_data(dataset_name, year='2018', states=None, horizon='1-Year'):
     dataset_mapping = {
         'income': (ACSIncome, 'Income'),
         'employment': (ACSEmployment, 'Employment'),
-        'public_coverage': (ACSPublicCoverage, 'PublicCoverage'),
+        'public': (ACSPublicCoverage, 'PublicCoverage'),
         'mobility': (ACSMobility, 'Mobility'),
-        'travel_time': (ACSTravelTime, 'TravelTime')
+        'travel': (ACSTravelTime, 'TravelTime')
     }
     
     if dataset_name not in dataset_mapping:
@@ -31,16 +31,16 @@ def load_acs_data(dataset_name, year='2018', states=None, horizon='1-Year'):
     df['RAC1P'] = df['RAC1P'].apply(lambda x: 0 if x == 2 else 1)
     df['SEX'] = df['SEX'].apply(lambda x: 1 if x == 1 else 0)
     df[label_name] = df[label_name].apply(lambda x: 1 if x else 0)
-    test_data, train_data = train_test_split(df, test_size=0.8, random_state=42)
-    return train_data, test_data
+    
+    return df
 
 def get_target_sensitive_attribute(dataset_name):
     attributes = {
         'income': ('Income', 'SEX', 0.0, 1.0),
         'employment': ('Employment', 'RAC1P', 0.0, 1.0),
-        'public_coverage': ('PublicCoverage', 'SEX', 0.0, 1.0),
+        'public': ('PublicCoverage', 'SEX', 0.0, 1.0),
         'mobility': ('Mobility', 'RAC1P', 0.0, 1.0),
-        'travel_time': ('TravelTime', 'RAC1P', 0.0, 1.0),
+        'travel': ('TravelTime', 'RAC1P', 0.0, 1.0),
         'adult': ('income', 'gender', 0.0, 1.0),
         'credit': ('SeriousDlqin2yrs', 'age', 0.0, 1.0)
     }
@@ -132,8 +132,10 @@ def load_data(dataset_name):
         return load_adult(sample=False)
     elif dataset_name == 'credit':
         return load_credit(preprocess = True)
-    elif dataset_name in ['income', 'employment', 'public_coverage', 'mobility', 'travel_time']:
-        return load_acs_data(dataset_name, year='2018', states=['CA'], horizon='1-Year')
+    elif dataset_name in ['income', 'employment', 'public', 'mobility', 'travel_time']:
+        df=load_acs_data(dataset_name, year='2018', states=['CA'], horizon='1-Year')
+        test_data, train_data = train_test_split(df, test_size=0.8, random_state=42)
+        return train_data, test_data
     else:
         raise ValueError("Dataset not supported. Choose from 'adult', 'german', or ACS datasets.")
 

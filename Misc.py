@@ -207,9 +207,12 @@ def sorted_influences_reg(test_df, model):
 
     test_data_with_influence = pd.DataFrame(test_data_array, columns=test_df.columns)
     test_data_with_influence['influence'] = estimate_test_influence
-    sorted_cluster_data = test_data_with_influence.sort_values(by='influence', ascending=True).reset_index(drop=True)
+    sorted_cluster_data = test_data_with_influence.sort_values(by='influence', ascending=False).reset_index(drop=True)
     sorted_cluster_data_array = sorted_cluster_data.drop(columns=['influence'])
     sorted_influences = sorted_cluster_data['influence']
 
     return sorted_cluster_data_array, sorted_influences
 
+def generate_synthetic_data(datapool, n):
+    synthetic_data = datapool.sample(n=n, replace=True, random_state=42)
+    return synthetic_data
