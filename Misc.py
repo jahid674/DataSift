@@ -7,6 +7,11 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import Ridge
 from sklearn.metrics import r2_score
 from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans, Birch
+from sklearn.metrics import silhouette_score
 import matplotlib.pyplot as plt 
 from kneed import KneeLocator
 from DatasetExt import *
@@ -123,14 +128,8 @@ def find_optimal_gmm_components(data):
         bic_scores.append(gmm.bic(data))
     kneedle_gmm = KneeLocator(list(n_components_range), bic_scores, curve="convex", direction="decreasing")
     optimal_num_components_gmm = kneedle_gmm.knee
-    '''plt.plot(n_components_range, bic_scores, marker='o')
-    plt.title('GMM Knee Plot')
-    plt.xlabel('Number of Components')
-    plt.ylabel('BIC Score')
-    plt.axvline(optimal_num_components_gmm, color='r', linestyle='--', label='Optimal Number of Components')
-    plt.show()'''
-
     return optimal_num_components_gmm
+
 
 def gmm_clustering(data, optimal_num_components):
     random_state = 42
@@ -144,6 +143,146 @@ def gmm_clustering(data, optimal_num_components):
         cluster_i_data = data.iloc[cluster_i_indices, :]
         clustered_data.append(cluster_i_data)
         print(f"Cluster {i+1} shape: {cluster_i_data.shape}")
+
+    return clustered_data
+
+
+# -----------------------------
+# UPDATED: find_optimal_components
+# Adds method="birch" (scalable hierarchical) using silhouette on a sample
+# -----------------------------
+def find_optimal_components(
+    data,
+    method="gmm",
+    k_range=range(2, 11),
+    gmm_range=range(1, 11),
+    random_state=42,
+    # BIRCH knobs
+    birch_threshold=0.5,
+    birch_branching_factor=50,
+    birch_sample_size=10000
+):
+    """
+    Finds an 'optimal' number of components/clusters depending on method.
+
+    - method="gmm": uses BIC + knee on n_components in gmm_range
+    - method="kmeans": uses inertia + knee on k in k_range
+    - method="birch": chooses k in k_range by silhouette on standardized features,
+                      computed on a random sample for scalability.
+    """
+    method = method.lower().strip()
+
+    if method == "gmm":
+        scores = []
+        x_vals = list(gmm_range)
+        for n_components in x_vals:
+            gmm = GaussianMixture(n_components=n_components, random_state=random_state)
+            gmm.fit(data)
+            scores.append(gmm.bic(data))
+        kneedle = KneeLocator(x_vals, scores, curve="convex", direction="decreasing")
+        return kneedle.knee
+
+    elif method == "kmeans":
+        inertias = []
+        x_vals = list(k_range)
+        for k in x_vals:
+            km = KMeans(n_clusters=k, random_state=random_state, n_init="auto")
+            km.fit(data)
+            inertias.append(km.inertia_)
+        kneedle = KneeLocator(x_vals, inertias, curve="convex", direction="decreasing")
+        return kneedle.knee
+
+    elif method == "birch":
+        rng = np.random.RandomState(random_state)
+
+        # Standardize first (important for BIRCH)
+        X = StandardScaler().fit_transform(data.values)
+        n = X.shape[0]
+        sample_n = min(int(birch_sample_size), n)
+        sample_idx = rng.choice(n, size=sample_n, replace=False)
+        Xs = X[sample_idx]
+
+        best_k, best_s = None, -np.inf
+        for k in list(k_range):
+            model = Birch(
+                threshold=float(birch_threshold),
+                branching_factor=int(birch_branching_factor),
+                n_clusters=int(k)
+            )
+            labels = model.fit_predict(Xs)
+
+            # Need at least 2 clusters for silhouette
+            if len(set(labels)) < 2:
+                continue
+
+            s = silhouette_score(Xs, labels)
+            if s > best_s:
+                best_s, best_k = s, int(k)
+
+        return best_k
+
+    else:
+        raise ValueError("method must be one of: 'gmm', 'kmeans', 'birch'")
+
+
+# -----------------------------
+# UPDATED: clustering
+# Adds method="birch" returning list of per-cluster DataFrames
+# -----------------------------
+def clustering(
+    data,
+    method="gmm",
+    optimal_num_components=None,
+    random_state=42,
+    # BIRCH knobs
+    birch_threshold=0.5,
+    birch_branching_factor=50,
+    scale_for_birch=True
+):
+    """
+    Runs clustering and returns a list of per-cluster DataFrames.
+
+    - method="gmm": uses optimal_num_components (required)
+    - method="kmeans": uses optimal_num_components (required)
+    - method="birch": uses optimal_num_components (required)
+        * scalable hierarchical clustering
+        * recommended: scale_for_birch=True
+    """
+    method = method.lower().strip()
+
+    if method in ("gmm", "kmeans", "birch") and (optimal_num_components is None or optimal_num_components < 1):
+        raise ValueError(f"For '{method}', provide optimal_num_components >= 1.")
+
+    if method == "gmm":
+        model = GaussianMixture(n_components=optimal_num_components, random_state=random_state)
+        model.fit(data)
+        labels = model.predict(data)
+
+    elif method == "kmeans":
+        model = KMeans(n_clusters=optimal_num_components, random_state=random_state, n_init="auto")
+        labels = model.fit_predict(data)
+
+    elif method == "birch":
+        X = data.values
+        if scale_for_birch:
+            X = StandardScaler().fit_transform(X)
+
+        model = Birch(
+            threshold=float(birch_threshold),
+            branching_factor=int(birch_branching_factor),
+            n_clusters=int(optimal_num_components)
+        )
+        labels = model.fit_predict(X)
+
+    else:
+        raise ValueError("method must be one of: 'gmm', 'kmeans', 'birch'")
+
+    clustered_data = []
+    for lab in sorted(set(labels)):
+        idx = np.where(labels == lab)[0]
+        cluster_df = data.iloc[idx, :]
+        clustered_data.append(cluster_df)
+        print(f"Cluster {len(clustered_data)} shape: {cluster_df.shape}")
 
     return clustered_data
 
