@@ -1,1157 +1,357 @@
-import numpy as np
 import pandas as pd
-import time
+import numpy as np
 import copy
 from sklearn.preprocessing import StandardScaler
-from metrics import *
-from Misc import *
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import Ridge
+from sklearn.metrics import r2_score
+from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans, Birch
+from sklearn.metrics import silhouette_score
+import matplotlib.pyplot as plt 
+from kneed import KneeLocator
+from DatasetExt import *
+np.random.seed(42)
 
-
-def mab_algorithm(partition_data, dataset_name, train_orig, val_orig, test_orig,
-                  Model, target_col, mini_batch_size, max_iteration, tau, budget, alpha, beta, metric_label):
-    # ----------------------------
-    # Prepare TRAIN+TEST (reporting only)
-    # ----------------------------
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-
-    # ----------------------------
-    # Prepare TRAIN+VAL (internal decision only)
-    # ----------------------------
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
-
-    # ----------------------------
-    # Initialize: report on TEST, decide/stop on VAL
-    # ----------------------------
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
-
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-
-    best_parity_val = ini_parity_val  # stopping based on validation
-
-    clusters = partition_data.copy()
-    stat, stat_ex = [ini_parity_test], [ini_parity_test]   # report test
-    acc_stat = [acc_ini_test]                              # report test
-    acc_ex, i_values_stat, i_values_ex_stat = [], [0], [0]
-    time_per_iteration_stat, iteration_time1 = [0], 0
-    cluster_count, train_shape = [], []
-    alpha_ = alpha
-
-    Ttrain_updated = copy.deepcopy(train_orig)
-    num_clusters = len(clusters)
-    k = max_iteration
-    r, R, n = np.zeros((k, num_clusters)), np.zeros((k, num_clusters)), np.zeros((k, num_clusters))
-    br, U = np.zeros(num_clusters), np.zeros(num_clusters)
-
-    M = copy.deepcopy(Model)
-    iteration = 0
-    iteration_mono = 0
-    remaining_budget = budget
-    
-
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        if iteration >= max_iteration - 1:
-            break
-        if iteration_mono >= round(budget / mini_batch_size):
-            break
-
-        selected_cluster_indices = np.argmax(U)
-        exhausted_clusters = set()
-        K = min(mini_batch_size, remaining_budget)
-
-        while len(clusters[selected_cluster_indices]) < K:
-            exhausted_clusters.add(selected_cluster_indices)
-            U[list(exhausted_clusters)] = -np.inf
-            selected_cluster_indices = np.argmax(U)
-            if selected_cluster_indices in exhausted_clusters:
-                break
-
-        if len(clusters[selected_cluster_indices]) < K:
-            break
-
-        iteration += 1
-        mini_batch_indices = np.random.choice(len(clusters[selected_cluster_indices]), size=K, replace=False)
-        mini_batch = clusters[selected_cluster_indices].iloc[mini_batch_indices]
-        Ttrain_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, X_train_orig_combined, _ = prepare_train_data(
-            Ttrain_combined, test_orig, target_col
-        )
-
-        # ----------------------------
-        # BEFORE/AFTER for DECISION: use VALIDATION
-        # ----------------------------
-        y_pred_val = M.predict_proba(x_val)
-        before_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_bef_val = computeAccuracy(y_val, y_pred_val)
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_1_val = computeAccuracy(y_val, y_pred_val_up)
-
-        del_acc = accuracy_1_val - accuracy_bef_val
-        delta = -(np.abs(after_val) - np.abs(before_val))
-
-        # ----------------------------
-        # Reporting values: compute on TEST
-        # ----------------------------
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        if delta > 0 and np.abs(after_val) < np.abs(best_parity_val):
-            iteration_mono += 1
-            Ttrain_updated, M = Ttrain_combined, model_up
-            remaining_budget -= K
-            i_values_ex_stat.append(iteration_mono)
-
-            stat_ex.append(after_test)          # report test
-            acc_stat.append(accuracy_1_test)    # report test
-            train_shape.append(Ttrain_updated.shape)
-            cluster_count.append(selected_cluster_indices + 1)
-
-            best_parity_val = after_val
-
-        normalized_distance = compute_normalized_distances(clusters)
-
+def compute_normalized_distances(clustered_data):
+  
+    num_clusters = len(clustered_data)
+    d = np.zeros((num_clusters, num_clusters))
+    reg_term=1e-3
+    for i in range(num_clusters):
         for j in range(num_clusters):
-            br[j] = calculate_group_disparity(clusters[j], dataset_name)
-            if j == selected_cluster_indices:
-                r[iteration, j] = (delta) / (1 + np.abs(br[j]))
-                n[iteration, j] = n[iteration - 1, j] + (r[iteration, j] > 0).astype(int)
-            else:
-                r[iteration, j] = ((delta) / (1 + np.abs(br[j]))) + (beta * (del_acc) * (1 + normalized_distance[selected_cluster_indices, j]))
-                n[iteration, j] = n[iteration - 1, j]
+            mean1 = np.mean(clustered_data[i], axis=0)   
+            mean2 = np.mean(clustered_data[j], axis=0)
+            distance = np.linalg.norm(mean1 - mean2) ** 2 + reg_term
+            d[i, j] = distance
+            
+    # Normalize the distances
+    min_distance = np.min(d)
+    max_distance = np.max(d)
+    normalized_distance = (d - min_distance) / (max_distance - min_distance)
+    
+    return normalized_distance
 
-            R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j] + 1)
-            U[j] = R[iteration, j] + alpha_ * np.sqrt(2 * np.log(np.sum(n[iteration, :]) + 1) / ((n[iteration, j]) + 1))
+def find_neighbors(clusters, normalized_dist, dist):
+    num_clusters = len(clusters)
+    neighbors = {i: set() for i in range(num_clusters)}
+    
+    for i in range(num_clusters):
+        for j in range(num_clusters):
+                distance=normalized_dist[i,j]
+                if distance <= dist:
+                    neighbors[i].add(j)
+                    neighbors[j].add(i)
+    
+    return neighbors
 
-        cluster_count.append(selected_cluster_indices + 1)
+def calculate_group_disparity(data_df, dataset_name):
+    positive_outcome=1
+    target_attribute, protected_attribute, protected_group, privileged_group= get_target_sensitive_attribute(dataset_name)
+    priv_positive = data_df[(data_df[protected_attribute] == privileged_group) & (data_df[target_attribute] == positive_outcome)]
+    prot_positive = data_df[(data_df[protected_attribute] == protected_group) & (data_df[target_attribute] == positive_outcome)]
+    priv_positive_rate = len(priv_positive) / (len(data_df[data_df[protected_attribute] == privileged_group])+1)
+    prot_positive_rate = len(prot_positive) / (len(data_df[data_df[protected_attribute] == protected_group])+1)
+    group_disparity = priv_positive_rate - prot_positive_rate
+    return group_disparity
 
-        cluster_df = clusters[selected_cluster_indices]
-        cluster_df = cluster_df.drop(cluster_df.index[list(mini_batch_indices)])
-        clusters[selected_cluster_indices] = cluster_df
+def get_group_count(data, dataset_name):
+    positive_outcome=1
+    negative_outcome=0
+    target_attribute, protected_attribute, protected_group, privileged_group= get_target_sensitive_attribute(dataset_name)
+    privileged_positive = data[(data[protected_attribute] == privileged_group) & (data[target_attribute] == positive_outcome)]
+    privileged_negative = data[(data[protected_attribute] == privileged_group) & (data[target_attribute] == negative_outcome)]
+    protected_positive = data[(data[protected_attribute] == protected_group) & (data[target_attribute] == positive_outcome)]
+    protected_negative = data[(data[protected_attribute] == protected_group) & (data[target_attribute] == negative_outcome)]
+    privileged_data_full = data[data[protected_attribute] == privileged_group]
+    protected_data_full = data[data[protected_attribute] == protected_group]   
+    return privileged_positive, privileged_negative, protected_positive, protected_negative, privileged_data_full, protected_data_full
 
-        iteration_time = time.time() - start_time
-        i_values_stat.append(iteration)
-        stat.append(after_test)  # report test
-        iteration_time1 += iteration_time
+def smart_sample(data_df, total_size, privileged_pct, privileged_positive_pct, dataset_name):
+    num_privileged = int(total_size * (privileged_pct / 100))
+    num_privileged_positive = int(num_privileged * (privileged_positive_pct / 100))
+    num_privileged_negative = num_privileged - num_privileged_positive
+    num_protected = total_size - num_privileged
+    privileged_positive, privileged_negative, protected_positive, protected_negative, privileged_data, protected_data=get_group_count(data_df, dataset_name)
 
-    return (Ttrain_updated, i_values_stat, i_values_ex_stat, stat_ex, stat, acc_stat,
-            time_per_iteration_stat, cluster_count, iteration_time1)
+    if len(privileged_positive) < num_privileged_positive or len(privileged_negative) < num_privileged_negative:
+        raise ValueError("Not enough data in one or more required categories to perform the requested sampling.")
 
-def mab_inf_algorithm(
-    partition_data, dataset_name,
-    train_orig, val_orig, test_orig,     # ✅ added val_orig
-    Model, target_col,
-    mini_batch_size, max_iteration, tau, budget, alpha, beta, metric_label
+    sampled_privileged_positive = privileged_positive.sample(n=num_privileged_positive, random_state=42)
+    sampled_privileged_negative = privileged_negative.sample(n=num_privileged_negative, random_state=42)
+    sampled_protected = protected_data.sample(n=num_protected, random_state=42)
+    sampled_df = pd.concat([sampled_privileged_positive, sampled_privileged_negative, sampled_protected])
+
+    return sampled_df
+
+def prepare_train_data(train_df, test_df, target_attribute):
+    X_train = train_df.drop(columns=[target_attribute])
+    y_train = train_df[target_attribute]
+    X_test = test_df.drop(columns=[target_attribute])
+    y_test = test_df[target_attribute]
+    duplicates = 1
+    make_duplicates = lambda x, d: pd.concat([x]*d, axis=0).reset_index(drop=True)
+    X_train = make_duplicates(X_train, duplicates)
+    X_test = make_duplicates(X_test, duplicates)
+    y_train = make_duplicates(y_train, duplicates)
+    y_test = make_duplicates(y_test, duplicates)
+    X_train_orig = copy.deepcopy(X_train)
+    X_test_orig = copy.deepcopy(X_test)
+    sc = StandardScaler()
+    X_train = sc.fit_transform(X_train)
+    X_test = sc.transform(X_test)
+
+
+    return X_train, X_test, y_train, y_test, X_train_orig, X_test_orig
+
+def get_minibatches(df, mini_batch_size):
+    batches = []
+    while len(df) > 0:
+        batch = df[:mini_batch_size]
+        batches.append(batch)
+        df = df.drop(batch.index)
+        if df.empty:
+            break
+    return batches
+
+def find_optimal_gmm_components(data):
+    n_components_range = range(1, 11)
+    random_state = 42
+    bic_scores = []
+    for n_components in n_components_range:
+        gmm = GaussianMixture(n_components=n_components, random_state=random_state)
+        gmm.fit(data)
+        bic_scores.append(gmm.bic(data))
+    kneedle_gmm = KneeLocator(list(n_components_range), bic_scores, curve="convex", direction="decreasing")
+    optimal_num_components_gmm = kneedle_gmm.knee
+    return optimal_num_components_gmm
+
+
+def gmm_clustering(data, optimal_num_components):
+    random_state = 42
+    gmm = GaussianMixture(n_components=optimal_num_components, random_state=random_state)
+    gmm.fit(data)
+    clusters_gmm = gmm.predict(data)
+
+    clustered_data = []
+    for i in range(optimal_num_components):
+        cluster_i_indices = np.where(clusters_gmm == i)[0]
+        cluster_i_data = data.iloc[cluster_i_indices, :]
+        clustered_data.append(cluster_i_data)
+        print(f"Cluster {i+1} shape: {cluster_i_data.shape}")
+
+    return clustered_data
+
+
+# -----------------------------
+# UPDATED: find_optimal_components
+# Adds method="birch" (scalable hierarchical) using silhouette on a sample
+# -----------------------------
+def find_optimal_components(
+    data,
+    method="gmm",
+    k_range=range(2, 11),
+    gmm_range=range(1, 11),
+    random_state=42,
+    # BIRCH knobs
+    birch_threshold=0.5,
+    birch_branching_factor=50,
+    birch_sample_size=10000
 ):
-    # ----------------------------
-    # Prepare TRAIN+TEST (reporting only)
-    # ----------------------------
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
+    """
+    Finds an 'optimal' number of components/clusters depending on method.
 
-    # ----------------------------
-    # Prepare TRAIN+VAL (internal decision only)
-    # ----------------------------
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
+    - method="gmm": uses BIC + knee on n_components in gmm_range
+    - method="kmeans": uses inertia + knee on k in k_range
+    - method="birch": chooses k in k_range by silhouette on standardized features,
+                      computed on a random sample for scalability.
+    """
+    method = method.lower().strip()
 
-    # ----------------------------
-    # Initialize: report on TEST, decide/stop on VAL
-    # ----------------------------
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
+    if method == "gmm":
+        scores = []
+        x_vals = list(gmm_range)
+        for n_components in x_vals:
+            gmm = GaussianMixture(n_components=n_components, random_state=random_state)
+            gmm.fit(data)
+            scores.append(gmm.bic(data))
+        kneedle = KneeLocator(x_vals, scores, curve="convex", direction="decreasing")
+        return kneedle.knee
 
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
+    elif method == "kmeans":
+        inertias = []
+        x_vals = list(k_range)
+        for k in x_vals:
+            km = KMeans(n_clusters=k, random_state=random_state, n_init="auto")
+            km.fit(data)
+            inertias.append(km.inertia_)
+        kneedle = KneeLocator(x_vals, inertias, curve="convex", direction="decreasing")
+        return kneedle.knee
 
-    best_parity_val = ini_parity_val  # ✅ stopping/accept logic based on validation
+    elif method == "birch":
+        rng = np.random.RandomState(random_state)
 
-    clusters = partition_data.copy()
+        # Standardize first (important for BIRCH)
+        X = StandardScaler().fit_transform(data.values)
+        n = X.shape[0]
+        sample_n = min(int(birch_sample_size), n)
+        sample_idx = rng.choice(n, size=sample_n, replace=False)
+        Xs = X[sample_idx]
 
-    # Reported stats are TEST-based
-    stat, stat_ex = [ini_parity_test], [ini_parity_test]
-    acc_stat = [acc_ini_test]
-
-    acc_ex, i_values_stat, i_values_ex_stat = [], [0], [0]
-    time_per_iteration_stat, iteration_time1 = [0], 0
-    cluster_count, train_shape = [], []
-
-    alpha = alpha
-    Ttrain_updated = copy.deepcopy(train_orig)
-    num_clusters = len(clusters)
-    k = max_iteration
-    r, R, n = np.zeros((k, num_clusters)), np.zeros((k, num_clusters)), np.zeros((k, num_clusters))
-    br, U = np.zeros(num_clusters), np.zeros(num_clusters)
-
-    M = copy.deepcopy(Model)
-    iteration = 0
-    iteration_mono = 0
-    remaining_budget = budget
-
-    # ✅ stopping criterion uses validation fairness
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-
-        if iteration >= max_iteration - 1:
-            break
-        if iteration_mono >= round(budget / mini_batch_size):
-            break
-
-        iteration += 1
-        selected_cluster_indices = np.argmax(U)
-        exhausted_clusters = set()
-        K = min(mini_batch_size, remaining_budget)
-
-        while len(clusters[selected_cluster_indices]) < K:
-            exhausted_clusters.add(selected_cluster_indices)
-            U[list(exhausted_clusters)] = -np.inf
-            selected_cluster_indices = np.argmax(U)
-            if selected_cluster_indices in exhausted_clusters:
-                break
-
-        if len(clusters[selected_cluster_indices]) < K:
-            break
-
-        mini_batch_indices = np.arange(K)
-        mini_batch = clusters[selected_cluster_indices][:K]
-        Ttrain_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        # NOTE: keep your original call signature/behavior here
-        X_train_combined, _, y_train_combined, _, X_train_orig_combined, X_test_original = prepare_train_data(
-            Ttrain_combined, test_orig, target_col
-        )
-
-        # ----------------------------
-        # BEFORE/AFTER for DECISION: use VALIDATION
-        # ----------------------------
-        y_pred_val = M.predict_proba(x_val)
-        before_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_bef_val = computeAccuracy(y_val, y_pred_val)
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_1_val = computeAccuracy(y_val, y_pred_val_up)
-
-        del_acc = accuracy_1_val - accuracy_bef_val
-        delta = -(np.abs(after_val) - np.abs(before_val))  # ✅ delta from validation
-
-        # ----------------------------
-        # Reporting values: compute on TEST
-        # ----------------------------
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        # Accept/reject based on VAL (but append TEST)
-        if delta > 0 and np.abs(after_val) < np.abs(best_parity_val):
-            iteration_mono += 1
-            Ttrain_updated, M = Ttrain_combined, model_up
-            remaining_budget = remaining_budget - K
-
-            i_values_ex_stat.append(iteration_mono)
-
-            # ✅ append TEST-based reporting values
-            stat_ex.append(after_test)
-            acc_stat.append(accuracy_1_test)
-
-            train_shape.append(Ttrain_updated.shape)
-            cluster_count.append(selected_cluster_indices + 1)
-
-            best_parity_val = after_val  # ✅ update best using validation
-            if np.abs(stat_ex[-1]) <= tau:
-                break
-
-        # Bandit reward updates unchanged (uses delta and del_acc as before)
-        normalized_distance = compute_normalized_distances(clusters)
-
-        for j in range(num_clusters):
-            br[j] = calculate_group_disparity(clusters[j], dataset_name)
-
-            if j == selected_cluster_indices:
-                r[iteration, j] = (delta) / (1 + np.abs(br[j]))
-                n[iteration, j] = n[iteration - 1, j] + (r[iteration, j] > 0).astype(int)
-            else:
-                r[iteration, j] = ((delta) / (1 + np.abs(br[j]))) + beta * (del_acc) * (1 + normalized_distance[selected_cluster_indices, j])
-                n[iteration, j] = n[iteration - 1, j]
-
-            R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j] + 1)
-            U[j] = R[iteration, j] + alpha * np.sqrt(
-                2 * np.log(np.sum(n[iteration, :]) + 1) / ((n[iteration, j]) + 1)
+        best_k, best_s = None, -np.inf
+        for k in list(k_range):
+            model = Birch(
+                threshold=float(birch_threshold),
+                branching_factor=int(birch_branching_factor),
+                n_clusters=int(k)
             )
+            labels = model.fit_predict(Xs)
 
-        cluster_count.append(selected_cluster_indices + 1)
+            # Need at least 2 clusters for silhouette
+            if len(set(labels)) < 2:
+                continue
 
-        # Remove used points from selected cluster
-        cluster_df = clusters[selected_cluster_indices]
-        mini_batch_indices = list(mini_batch_indices)
-        cluster_df = cluster_df.drop(cluster_df.index[mini_batch_indices])
-        clusters[selected_cluster_indices] = cluster_df
+            s = silhouette_score(Xs, labels)
+            if s > best_s:
+                best_s, best_k = s, int(k)
 
-        # ✅ per-iteration reporting on TEST
-        i_values_stat.append(iteration)
-        stat.append(after_test)
+        return best_k
 
-        iteration_time = time.time() - start_time
-        iteration_time1 += iteration_time
-
-    return (
-        Ttrain_updated, i_values_stat, i_values_ex_stat, stat_ex, stat, acc_stat,
-        time_per_iteration_stat, cluster_count, iteration_time1
-    )
+    else:
+        raise ValueError("method must be one of: 'gmm', 'kmeans', 'birch'")
 
 
-def mab_algorithm_base(partition_data, dataset_name, train_orig, val_orig, test_orig,
-                       Model, target_col, mini_batch_size, max_iteration, tau, budget, alpha, metric_label):
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
+# -----------------------------
+# UPDATED: clustering
+# Adds method="birch" returning list of per-cluster DataFrames
+# -----------------------------
+def clustering(
+    data,
+    method="gmm",
+    optimal_num_components=None,
+    random_state=42,
+    # BIRCH knobs
+    birch_threshold=0.5,
+    birch_branching_factor=50,
+    scale_for_birch=True
+):
+    """
+    Runs clustering and returns a list of per-cluster DataFrames.
 
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
+    - method="gmm": uses optimal_num_components (required)
+    - method="kmeans": uses optimal_num_components (required)
+    - method="birch": uses optimal_num_components (required)
+        * scalable hierarchical clustering
+        * recommended: scale_for_birch=True
+    """
+    method = method.lower().strip()
 
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-    best_parity_val = ini_parity_val
+    if method in ("gmm", "kmeans", "birch") and (optimal_num_components is None or optimal_num_components < 1):
+        raise ValueError(f"For '{method}', provide optimal_num_components >= 1.")
 
-    clusters = partition_data.copy()
-    stat, stat_ex = [ini_parity_test], [ini_parity_test]
-    acc_stat = [acc_ini_test]
-    acc_ex, i_values_stat, i_values_ex_stat = [], [0], [0]
-    time_per_iteration_stat, iteration_time1 = [0], 0
-    cluster_count, train_shape = [], []
-    alpha_ = alpha
+    if method == "gmm":
+        model = GaussianMixture(n_components=optimal_num_components, random_state=random_state)
+        model.fit(data)
+        labels = model.predict(data)
 
-    Ttrain_updated = copy.deepcopy(train_orig)
-    num_clusters = len(clusters)
-    k = max_iteration
-    r, R, n = np.zeros((k, num_clusters)), np.zeros((k, num_clusters)), np.zeros((k, num_clusters))
-    br, U = np.zeros(num_clusters), np.zeros(num_clusters)
+    elif method == "kmeans":
+        model = KMeans(n_clusters=optimal_num_components, random_state=random_state, n_init="auto")
+        labels = model.fit_predict(data)
 
-    M = copy.deepcopy(Model)
-    iteration = 0
-    iteration_mono = 0
-    remaining_budget = budget
+    elif method == "birch":
+        X = data.values
+        if scale_for_birch:
+            X = StandardScaler().fit_transform(X)
 
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        if iteration >= max_iteration - 1:
-            break
-        if iteration_mono >= round(budget / mini_batch_size):
-            break
-
-        max_indices = np.where(U == np.max(U))[0]
-        selected_cluster_indices = np.random.choice(max_indices)
-
-        exhausted_clusters = set()
-        K = min(mini_batch_size, remaining_budget)
-        while len(clusters[selected_cluster_indices]) < K:
-            exhausted_clusters.add(selected_cluster_indices)
-            U[list(exhausted_clusters)] = -np.inf
-            selected_cluster_indices = np.argmax(U)
-            if selected_cluster_indices in exhausted_clusters:
-                break
-
-        if len(clusters[selected_cluster_indices]) < K:
-            break
-
-        iteration += 1
-        mini_batch_indices = np.random.choice(len(clusters[selected_cluster_indices]), size=K, replace=False)
-        mini_batch = clusters[selected_cluster_indices].iloc[mini_batch_indices]
-        Ttrain_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, _, _ = prepare_train_data(
-            Ttrain_combined, test_orig, target_col
+        model = Birch(
+            threshold=float(birch_threshold),
+            branching_factor=int(birch_branching_factor),
+            n_clusters=int(optimal_num_components)
         )
+        labels = model.fit_predict(X)
 
-        # decision on VAL
-        y_pred_val = M.predict_proba(x_val)
-        before_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
+    else:
+        raise ValueError("method must be one of: 'gmm', 'kmeans', 'birch'")
 
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
+    clustered_data = []
+    for lab in sorted(set(labels)):
+        idx = np.where(labels == lab)[0]
+        cluster_df = data.iloc[idx, :]
+        clustered_data.append(cluster_df)
+        print(f"Cluster {len(clustered_data)} shape: {cluster_df.shape}")
 
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
+    return clustered_data
 
-        delta = np.abs(after_val) - np.abs(before_val)
+def sorted_influence_KNN(train_df, test_df, influences, k):
+    def similarity_metric(test_point, train_data):
+        distances = np.linalg.norm(train_data - test_point, axis=1)
+        return distances
 
-        # report on TEST
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        if delta < 0 and np.abs(after_val) < np.abs(best_parity_val):
-            iteration_mono += 1
-            Ttrain_updated, M = Ttrain_combined, model_up
-            remaining_budget -= K
-            i_values_ex_stat.append(iteration_mono)
-            stat_ex.append(after_test)
-            acc_stat.append(accuracy_1_test)
-            train_shape.append(Ttrain_updated.shape)
-            cluster_count.append(selected_cluster_indices + 1)
-            best_parity_val = after_val
-
-        normalized_distance = compute_normalized_distances(clusters)
-        for j in range(num_clusters):
-            br[j] = calculate_group_disparity(clusters[j], dataset_name)
-            if j == selected_cluster_indices:
-                r[iteration, j] = -(delta) / (1 + np.abs(br[j]))
-                n[iteration, j] = n[iteration - 1, j] + (r[iteration, j] > 0).astype(int)
-            else:
-                r[iteration, j] = (-(delta)) / (1 + np.abs(br[j]))
-                n[iteration, j] = n[iteration - 1, j]
-            R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j] + 1)
-            U[j] = R[iteration, j] + alpha_ * np.sqrt(2 * np.log(np.sum(n[iteration, :]) + 1) / ((n[iteration, j]) + 1))
-
-        cluster_count.append(selected_cluster_indices + 1)
-        cluster_df = clusters[selected_cluster_indices]
-        cluster_df = cluster_df.drop(cluster_df.index[list(mini_batch_indices)])
-        clusters[selected_cluster_indices] = cluster_df
-
-        iteration_time = time.time() - start_time
-        i_values_stat.append(iteration)
-        stat.append(after_test)
-        iteration_time1 += iteration_time
-
-    return (Ttrain_updated, i_values_stat, i_values_ex_stat, stat_ex, stat, acc_stat,
-            time_per_iteration_stat, cluster_count, iteration_time1)
+    def estimate_test_influence(test_data, train_data, influences, k):
+        estimated_influences = []
+        for test_point in test_data:
+            similarities = similarity_metric(test_point, train_data)
+            nearest_indices = np.argsort(similarities)[:k]
+            nearest_influences = influences[nearest_indices]
+            estimated_influence = np.mean(nearest_influences)
+            estimated_influences.append(estimated_influence)
+        estimated_influences = np.array(estimated_influences)
+        return estimated_influences
+    train_orig_array = train_df.to_numpy()
+    test_data_array = test_df.to_numpy()
+    test_influences = estimate_test_influence(test_data_array, train_orig_array, influences, k)
+    test_data_with_influence = pd.DataFrame(test_data_array, columns=test_df.columns)
+    test_data_with_influence['influence'] = test_influences
+    sorted_cluster_data = test_data_with_influence.sort_values(by='influence', ascending=True).reset_index(drop=True)
+    sorted_cluster_data_array = sorted_cluster_data.drop(columns=['influence'])
+    sorted_influences = sorted_cluster_data['influence']
+    return sorted_cluster_data_array, sorted_influences
 
 
-def mab_algorithm_dist(partition_data, dataset_name, train_orig, val_orig, test_orig,
-                       Model, target_col, mini_batch_size, max_iteration, tau, budget, Euclid_normalized_d, alpha, metric_label):
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
+def train_reg_model(data_df, influence_fair, target_column, degree=2, alpha=1.0, test_size=0.9, random_state=42):
+    data_orig_inf = data_df.copy()
+    data_orig_inf['Influence'] = influence_fair
+    Target_inf = target_column
+    train_orig_inf, test_orig_inf = train_test_split(data_orig_inf, test_size=test_size, random_state=random_state)
+
+    X_train_inf, X_test_inf, y_train_inf, y_test_inf, X_train_orig_inf, y_train_orig_inf = prepare_train_data(
+        train_orig_inf, test_orig_inf, Target_inf
     )
 
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
-
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-    best_parity_val = ini_parity_val
-
-    clusters = partition_data.copy()
-    stat, stat_ex = [ini_parity_test], [ini_parity_test]
-    acc_stat = [acc_ini_test]
-    acc_ex, i_values_stat, i_values_ex_stat = [], [0], [0]
-    time_per_iteration_stat, iteration_time1 = [0], 0
-    cluster_count, train_shape = [], []
-    Ttrain_updated = copy.deepcopy(train_orig)
-
-    num_clusters = len(clusters)
-    k = max_iteration
-    r, R, n = np.zeros((k, num_clusters)), np.zeros((k, num_clusters)), np.zeros((k, num_clusters))
-    br, U = np.zeros(num_clusters), np.zeros(num_clusters)
-
-    M = copy.deepcopy(Model)
-    iteration = 0
-    iteration_mono = 0
-    remaining_budget = budget
-
-    # sequential before tracking should be on VAL for decision
-    before_val = ini_parity_val
-
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        if iteration >= max_iteration - 1:
-            break
-        if iteration_mono >= round(budget / mini_batch_size):
-            break
-
-        iteration += 1
-        max_indices = np.where(U == np.max(U))[0]
-        selected_cluster_indices = np.random.choice(max_indices)
-
-        exhausted_clusters = set()
-        K = min(mini_batch_size, remaining_budget)
-        while len(clusters[selected_cluster_indices]) < K:
-            exhausted_clusters.add(selected_cluster_indices)
-            U[list(exhausted_clusters)] = -np.inf
-            selected_cluster_indices = np.argmax(U)
-            if selected_cluster_indices in exhausted_clusters:
-                break
-
-        if len(clusters[selected_cluster_indices]) < K:
-            break
-
-        mini_batch_indices = np.random.choice(len(clusters[selected_cluster_indices]), size=K, replace=False)
-        mini_batch = clusters[selected_cluster_indices].iloc[mini_batch_indices]
-        Ttrain_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, _, _ = prepare_train_data(
-            Ttrain_combined, test_orig, target_col
-        )
-
-        # decision on VAL (note: original code used rolling "before"; keep same behavior but on VAL)
-        accuracy_bef_val = computeAccuracy(y_val, M.predict_proba(x_val))
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_1_val = computeAccuracy(y_val, y_pred_val_up)
-
-        delta = np.abs(after_val) - np.abs(before_val)
-        del_acc = accuracy_1_val - accuracy_bef_val
-        before_val = after_val
-
-        # report on TEST
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        if delta < 0:
-            iteration_mono += 1
-            Ttrain_updated, M = Ttrain_combined, model_up
-            remaining_budget -= K
-            i_values_ex_stat.append(iteration_mono)
-            stat_ex.append(after_test)
-            acc_stat.append(accuracy_1_test)
-            train_shape.append(Ttrain_updated.shape)
-            cluster_count.append(selected_cluster_indices + 1)
-
-            cluster_count.append(selected_cluster_indices + 1)
-            cluster_df = clusters[selected_cluster_indices]
-            cluster_df = cluster_df.drop(cluster_df.index[list(mini_batch_indices)])
-            clusters[selected_cluster_indices] = cluster_df
-            best_parity_val = after_val
-
-        dist = 0.001
-        for j in range(num_clusters):
-            n_dist = Euclid_normalized_d[j, selected_cluster_indices]
-            if j in find_neighbors(clusters, Euclid_normalized_d, dist)[selected_cluster_indices]:
-                r[iteration, j] = delta * (1 - n_dist / dist)
-                n[iteration, j] = n[iteration - 1, j] + (r[iteration, j] > 0).astype(int)
-                R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j] + 1)
-            else:
-                r[iteration, j] = 0
-                n[iteration, j] = n[iteration - 1, j]
-                R[iteration, j] = R[iteration - 1, j]
-            R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j] + 1)
-            U[j] = R[iteration, j] + alpha * np.sqrt(2 * np.log(np.sum(n[iteration, :]) + 1) / ((n[iteration, j]) + 1))
-
-        iteration_time = time.time() - start_time
-        time_per_iteration_stat.append(time_per_iteration_stat[-1] + iteration_time)
-        i_values_stat.append(iteration)
-        stat.append(after_test)
-        iteration_time1 += iteration_time
-
-    return (Ttrain_updated, i_values_stat, i_values_ex_stat, stat_ex, stat, acc_stat,
-            time_per_iteration_stat, cluster_count, iteration_time1)
-
-
-def random_algorithm(clusters, dataset_name, train_orig, val_orig, test_orig, Model, target_col, mini_batch_size, tau, budget, metric_label):
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
-
-    # report init on TEST
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
-
-    # stop/decision on VAL
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-    best_parity_val = ini_parity_val
-
-    stat_ran, stat_ex_ran = [ini_parity_test], [ini_parity_test]
-    acc_ran = [acc_ini_test]
-    acc_ex, i_values_ran, i_values_ex_ran = [], [0], [0]
-    time_per_iteration_ran, iteration_time1 = [0], 0
-
-    Ttrain_updated = copy.deepcopy(train_orig)
-    train_shape = []
-    M = copy.deepcopy(Model)
-    iteration = 0
-    remaining_budget = budget
-
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        K = min(mini_batch_size, remaining_budget)
-        if len(clusters) < K:
-            break
-        if iteration >= round(budget / mini_batch_size):
-            break
-
-        iteration += 1
-        mini_batch_indices = np.random.choice(len(clusters), size=K, replace=False)
-        mini_batch = clusters.iloc[mini_batch_indices]
-        Ttrain_updated_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, _, _ = prepare_train_data(
-            Ttrain_updated_combined, test_orig, target_col
-        )
-
-        # decision delta on VAL
-        y_pred_val = M.predict_proba(x_val)
-        before_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_bef_val = computeAccuracy(y_val, y_pred_val)
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-
-        # report on TEST
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        delta = np.abs(after_val) - np.abs(before_val)
-
-        if delta < 0 or delta > 0:
-            remaining_budget -= K
-            acc_ex.append(accuracy_1_test)
-            Ttrain_updated = Ttrain_updated_combined
-            M = model_up
-            i_values_ex_ran.append(iteration)
-            stat_ex_ran.append(after_test)
-            train_shape.append(Ttrain_updated.shape)
-
-        if np.abs(after_val) < np.abs(best_parity_val):
-            best_parity_val = after_val
-
-        cluster_df = clusters.drop(clusters.index[list(mini_batch_indices)])
-        clusters = cluster_df
-
-        i_values_ran.append(iteration)
-        stat_ran.append(after_test)
-        acc_ran.append(accuracy_1_test)
-
-        iteration_time1 += (time.time() - start_time)
-
-    return Ttrain_updated, i_values_ex_ran, i_values_ran, stat_ran, stat_ex_ran, acc_ran, iteration_time1
-
-
-def entropy_based_algorithm(clusters, dataset_name, train_orig, val_orig, test_orig, Model, target_col, mini_batch_size, tau, budget, metric_label):
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
-
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
-
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-    best_parity_val = ini_parity_val
-
-    stat_ent, stat_ex_ent = [ini_parity_test], [ini_parity_test]
-    acc_ent = [acc_ini_test]
-    acc_ex, i_values_ent, i_values_ex_ent = [], [0], [0]
-    time_per_iteration_ent, iteration_time1 = [0], 0
-
-    Ttrain_updated = copy.deepcopy(train_orig)
-    train_shape = []
-    M = copy.deepcopy(Model)
-    iteration = 0
-    remaining_budget = budget
-
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        K = min(mini_batch_size, remaining_budget)
-        if len(clusters) < K:
-            break
-        if iteration >= round(budget / mini_batch_size):
-            break
-
-        iteration += 1
-
-        y_pred_clusters = M.predict_proba(clusters.drop([target_col], axis=1).values)
-        p = y_pred_clusters
-        entropy = - (p * np.log2(p + 1e-12) + (1 - p) * np.log2(1 - p + 1e-12))
-        mini_batch_indices = np.argsort(entropy)[-K:]
-        mini_batch = clusters.iloc[mini_batch_indices]
-
-        Ttrain_updated_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, _, _ = prepare_train_data(
-            Ttrain_updated_combined, test_orig, target_col
-        )
-
-        # decision on VAL
-        y_pred_val = M.predict_proba(x_val)
-        before_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-        delta = np.abs(after_val) - np.abs(before_val)
-
-        # report on TEST
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        if delta < 0 or delta > 0:
-            remaining_budget -= K
-            i_values_ex_ent.append(iteration)
-            stat_ex_ent.append(after_test)
-            acc_ex.append(accuracy_1_test)
-            Ttrain_updated = Ttrain_updated_combined
-            M = model_up
-            train_shape.append(Ttrain_updated.shape)
-
-        if np.abs(after_val) < np.abs(best_parity_val):
-            best_parity_val = after_val
-
-        clusters = clusters.drop(clusters.index[list(mini_batch_indices)])
-
-        i_values_ent.append(iteration)
-        stat_ent.append(after_test)
-        acc_ent.append(accuracy_1_test)
-
-        iteration_time1 += (time.time() - start_time)
-
-    return Ttrain_updated, i_values_ex_ent, i_values_ent, stat_ent, stat_ex_ent, acc_ent, iteration_time1
-
-
-def inf_algorithm(clusters, dataset_name, train_orig, val_orig, test_orig, Model, target_col, mini_batch_size, tau, budget, metric_label):
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
-
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
-
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-    best_parity_val = ini_parity_val
-
-    stat_ran, stat_ex_ran = [ini_parity_test], [ini_parity_test]
-    acc_ran = [acc_ini_test]
-    acc_ex, i_values_ran, i_values_ex_ran = [], [0], [0]
-    iteration_time1 = 0
-
-    Ttrain_updated = copy.deepcopy(train_orig)
-    train_shape = []
-    M = copy.deepcopy(Model)
-    iteration = 0
-    remaining_budget = budget
-
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        K = min(mini_batch_size, remaining_budget)
-        if len(clusters) < K:
-            break
-        if iteration >= round(budget / mini_batch_size):
-            break
-
-        iteration += 1
-        mini_batch_indices = np.arange(K)
-        mini_batch = clusters[:K]
-
-        Ttrain_updated_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, _, _ = prepare_train_data(
-            Ttrain_updated_combined, test_orig, target_col
-        )
-
-        # decision on VAL
-        y_pred_val = M.predict_proba(x_val)
-        before_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-        delta = np.abs(after_val) - np.abs(before_val)
-
-        # report on TEST
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        if delta < 0 or delta > 0:
-            remaining_budget -= K
-            i_values_ex_ran.append(iteration)
-            stat_ex_ran.append(after_test)
-            acc_ex.append(accuracy_1_test)
-            Ttrain_updated = Ttrain_updated_combined
-            M = model_up
-            train_shape.append(Ttrain_updated.shape)
-
-        if np.abs(after_val) < np.abs(best_parity_val):
-            best_parity_val = after_val
-
-        clusters = clusters.drop(clusters.index[list(mini_batch_indices)])
-
-        i_values_ran.append(iteration)
-        stat_ran.append(after_test)
-        acc_ran.append(accuracy_1_test)
-
-        iteration_time1 += (time.time() - start_time)
-
-    return Ttrain_updated, i_values_ex_ran, i_values_ran, stat_ran, stat_ex_ran, acc_ran, iteration_time1
-
-
-def mab_algorithm_acc(partition_data, dataset_name, train_orig, val_orig, test_orig,
-                      Model, target_col, mini_batch_size, max_iteration, tau, budget, Euclid_normalized_d, alpha, metric_label):
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
-
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
-
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-    best_parity_val = ini_parity_val
-
-    clusters = partition_data.copy()
-    stat, stat_ex = [ini_parity_test], [ini_parity_test]
-    acc_stat = [acc_ini_test]
-    acc_ex, i_values_stat, i_values_ex_stat = [], [0], [0]
-    time_per_iteration_stat, iteration_time1 = [0], 0
-    cluster_count, train_shape = [], []
-
-    Ttrain_updated = copy.deepcopy(train_orig)
-    num_clusters = len(clusters)
-    k = max_iteration
-    r, R, n = np.zeros((k, num_clusters)), np.zeros((k, num_clusters)), np.zeros((k, num_clusters))
-    br, U = np.zeros(num_clusters), np.zeros(num_clusters)
-
-    M = copy.deepcopy(Model)
-    iteration = 0
-    iteration_mono = 0
-    remaining_budget = budget
-
-    # rolling before should be on VAL for decision
-    before_val = ini_parity_val
-
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        if iteration >= max_iteration - 1:
-            break
-        if iteration_mono >= round(budget / mini_batch_size):
-            break
-
-        iteration += 1
-        max_indices = np.where(U == np.max(U))[0]
-        selected_cluster_indices = np.random.choice(max_indices)
-
-        exhausted_clusters = set()
-        K = min(mini_batch_size, remaining_budget)
-        while len(clusters[selected_cluster_indices]) < K:
-            exhausted_clusters.add(selected_cluster_indices)
-            U[list(exhausted_clusters)] = -np.inf
-            selected_cluster_indices = np.argmax(U)
-            if selected_cluster_indices in exhausted_clusters:
-                break
-
-        if len(clusters[selected_cluster_indices]) < K:
-            break
-
-        mini_batch_indices = np.random.choice(len(clusters[selected_cluster_indices]), size=K, replace=False)
-        mini_batch = clusters[selected_cluster_indices].iloc[mini_batch_indices]
-        Ttrain_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, _, _ = prepare_train_data(
-            Ttrain_combined, test_orig, target_col
-        )
-
-        # decision on VAL (accuracy-based)
-        y_pred_val = M.predict_proba(x_val)
-        accuracy_bef_val = computeAccuracy(y_val, y_pred_val)
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_1_val = computeAccuracy(y_val, y_pred_val_up)
-
-        delta = np.abs(after_val) - np.abs(before_val)
-        acc_del = accuracy_1_val - accuracy_bef_val
-        before_val = after_val
-
-        # report on TEST
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        if acc_del > 0:
-            iteration_mono += 1
-            Ttrain_updated, M = Ttrain_combined, model_up
-            remaining_budget -= K
-            i_values_ex_stat.append(iteration_mono)
-            stat_ex.append(after_test)
-            acc_stat.append(accuracy_1_test)
-            train_shape.append(Ttrain_updated.shape)
-            cluster_count.append(selected_cluster_indices + 1)
-            cluster_count.append(selected_cluster_indices + 1)
-
-            cluster_df = clusters[selected_cluster_indices]
-            cluster_df = cluster_df.drop(cluster_df.index[list(mini_batch_indices)])
-            clusters[selected_cluster_indices] = cluster_df
-
-            best_parity_val = after_val
-
-        dist = 0.001
-        for j in range(num_clusters):
-            n_dist = Euclid_normalized_d[j, selected_cluster_indices]
-            if j in find_neighbors(clusters, Euclid_normalized_d, dist)[selected_cluster_indices]:
-                r[iteration, j] = delta * (1 - n_dist / dist)
-                n[iteration, j] = n[iteration - 1, j] + (r[iteration, j] > 0).astype(int)
-                R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j] + 1)
-            else:
-                r[iteration, j] = 0
-                n[iteration, j] = n[iteration - 1, j]
-                R[iteration, j] = R[iteration - 1, j]
-            R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j] + 1)
-            U[j] = R[iteration, j] + alpha * np.sqrt(2 * np.log(np.sum(n[iteration, :]) + 1) / ((n[iteration, j]) + 1))
-
-        iteration_time = time.time() - start_time
-        time_per_iteration_stat.append(time_per_iteration_stat[-1] + iteration_time)
-        i_values_stat.append(iteration)
-        stat.append(after_test)
-        iteration_time1 += iteration_time
-
-    return (Ttrain_updated, i_values_stat, i_values_ex_stat, stat_ex, stat, acc_stat,
-            time_per_iteration_stat, cluster_count, iteration_time1)
-
-
-def random_algorithm_acc(clusters, dataset_name, train_orig, val_orig, test_orig,
-                         Model, target_col, mini_batch_size, tau, budget, metric_label):
-    X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(
-        train_orig, test_orig, target_col
-    )
-    _, x_val, _, y_val, _, X_val_original = prepare_train_data(
-        train_orig, val_orig, target_col
-    )
-
-    y_pred_test = Model.predict_proba(x_test)
-    ini_parity_test = computeFairness(y_pred_test, X_test_original, y_test, metric_label, dataset_name)
-    acc_ini_test = computeAccuracy(y_test, y_pred_test)
-
-    y_pred_val = Model.predict_proba(x_val)
-    ini_parity_val = computeFairness(y_pred_val, X_val_original, y_val, metric_label, dataset_name)
-    best_parity_val = ini_parity_val
-
-    stat_ran, stat_ex_ran = [ini_parity_test], [ini_parity_test]
-    acc_ran = [acc_ini_test]
-    acc_ex, i_values_ran, i_values_ex_ran = [], [0], [0]
-    iteration_time1 = 0
-
-    Ttrain_updated = copy.deepcopy(train_orig)
-    train_shape = []
-    M = copy.deepcopy(Model)
-    iteration = 0
-    remaining_budget = budget
-
-    while np.abs(best_parity_val) > tau and remaining_budget > 0:
-        start_time = time.time()
-        K = min(mini_batch_size, remaining_budget)
-        if len(clusters) < K:
-            break
-        if iteration >= round(budget / mini_batch_size):
-            break
-
-        iteration += 1
-        mini_batch_indices = np.random.choice(len(clusters), size=K, replace=False)
-        mini_batch = clusters.iloc[mini_batch_indices]
-
-        Ttrain_updated_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-        X_train_combined, _, y_train_combined, _, _, _ = prepare_train_data(
-            Ttrain_updated_combined, test_orig, target_col
-        )
-
-        # decision on VAL (accuracy delta)
-        y_pred_val = M.predict_proba(x_val)
-        accuracy_bef_val = computeAccuracy(y_val, y_pred_val)
-
-        model_up = copy.deepcopy(M)
-        model_up.fit(X_train_combined, y_train_combined)
-
-        y_pred_val_up = model_up.predict_proba(x_val)
-        after_val = computeFairness(y_pred_val_up, X_val_original, y_val, metric_label, dataset_name)
-        accuracy_1_val = computeAccuracy(y_val, y_pred_val_up)
-
-        # report on TEST
-        y_pred_test_up = model_up.predict_proba(x_test)
-        after_test = computeFairness(y_pred_test_up, X_test_original, y_test, metric_label, dataset_name)
-        accuracy_1_test = computeAccuracy(y_test, y_pred_test_up)
-
-        del_acc = accuracy_1_val - accuracy_bef_val
-
-        if del_acc < 0 or del_acc > 0:
-            remaining_budget -= K
-            acc_ex.append(accuracy_1_test)
-            Ttrain_updated = Ttrain_updated_combined
-            M = model_up
-            i_values_ex_ran.append(iteration)
-            stat_ex_ran.append(after_test)
-            train_shape.append(Ttrain_updated.shape)
-
-        if np.abs(after_val) < np.abs(best_parity_val):
-            best_parity_val = after_val
-
-        clusters = clusters.drop(clusters.index[list(mini_batch_indices)])
-
-        i_values_ran.append(iteration)
-        stat_ran.append(after_test)
-        acc_ran.append(accuracy_1_test)
-
-        iteration_time1 += (time.time() - start_time)
-
-    return Ttrain_updated, i_values_ex_ran, i_values_ran, stat_ran, stat_ex_ran, acc_ran, iteration_time1
-
-
-
-# def mab_inf_algorithm(partition_data, dataset_name, train_orig, test_orig, Model, target_col, mini_batch_size, max_iteration, tau, budget, alpha, beta):
-#     X_train, x_test, y_train_combined, y_test, X_train_orig, X_test_original = prepare_train_data(train_orig, test_orig, target_col)
-#     y_pred_test=Model.predict_proba(x_test)
-#     ini_parity= computeFairness(y_pred_test, X_test_original, y_test, 0, dataset_name)
-#     best_parity = ini_parity       
-#     #ini_parity=[ini_parity]
-#     clusters = partition_data.copy()   
-#     stat, stat_ex = [ini_parity], [ini_parity]
-#     acc_ini=computeAccuracy(y_test, y_pred_test)
-#     #acc_ini=[acc_ini]
-#     acc_stat=[acc_ini]
-#     acc_ex, i_values_stat, i_values_ex_stat = [], [0], [0]
-#     time_per_iteration_stat, iteration_time1 = [0], 0
-#     cluster_count, train_shape = [], []
-#     alpha=alpha
-#     Ttrain_updated = copy.deepcopy(train_orig)
-#     num_clusters = len(clusters)
-#     k = max_iteration
-#     r, R, n = np.zeros((k, num_clusters)), np.zeros((k, num_clusters)), np.zeros((k, num_clusters))
-#     br, U = np.zeros(num_clusters), np.zeros(num_clusters)
-    
-#     M = copy.deepcopy(Model)
-#     iteration=0
-#     iteration_mono=0
-#     remaining_budget=budget
-#     while np.abs(best_parity)>tau and remaining_budget > 0:
-#         start_time = time.time()
-#         if iteration >= max_iteration-1:
-#             break
-#         if iteration_mono >= round(budget/mini_batch_size):
-#             break
-#         iteration +=1
-#         #max_indices = np.where(U == np.max(U))[0]
-#         #selected_cluster_indices = np.random.choice(max_indices)
-#         selected_cluster_indices = np.argmax(U)
-#         exhausted_clusters = set()
-#         K = min(mini_batch_size, remaining_budget)
-#         while len(clusters[selected_cluster_indices]) < K:
-#             exhausted_clusters.add(selected_cluster_indices)
-#             U[list(exhausted_clusters)] = -np.inf
-#             selected_cluster_indices = np.argmax(U)
-#             if selected_cluster_indices in exhausted_clusters:
-#                 break
-        
-#         if len(clusters[selected_cluster_indices]) < K:
-#             break
-
-#         mini_batch_indices = np.arange(K)
-#         mini_batch = clusters[selected_cluster_indices][:K]
-#         Ttrain_combined = pd.concat([Ttrain_updated, mini_batch], axis=0).reset_index(drop=True)
-
-#         X_train_combined, _, y_train_combined, _, X_train_orig_combined, X_test_original = prepare_train_data(Ttrain_combined, test_orig, target_col)
-        
-#         y_pred_test = M.predict_proba(x_test)
-#         before = computeFairness(y_pred_test, X_test_original, y_test, 0, dataset_name)
-#         accuracy_bef = computeAccuracy(y_test, y_pred_test)
-        
-#         model_up = copy.deepcopy(M)
-#         model_up.fit(X_train_combined, y_train_combined)
-        
-#         y_pred_test = model_up.predict_proba(x_test)
-#         after = computeFairness(y_pred_test, X_test_original, y_test, 0, dataset_name)
-#         accuracy_1 = computeAccuracy(y_test, y_pred_test)
-#         del_acc=accuracy_1-accuracy_bef
-#         delta = -(np.abs(after) - np.abs(before))
-#         if delta > 0 and np.abs(after) < np.abs(best_parity):                                                   
-#             iteration_mono += 1
-#             Ttrain_updated, M = Ttrain_combined, model_up
-#             remaining_budget=remaining_budget-K
-#             i_values_ex_stat.append(iteration_mono)
-#             stat_ex.append(after)
-#             acc_stat.append(accuracy_1)
-#             train_shape.append(Ttrain_updated.shape)
-#             cluster_count.append(selected_cluster_indices + 1)
-#             best_parity = after
-#             #print(f'These indices drwan from{mini_batch_indices} drawn from{selected_cluster_indices+1}')
-        
-        
-#         for j in range(num_clusters):
-#             br[j]=calculate_group_disparity(clusters[j], dataset_name)
-#             normalized_distance=compute_normalized_distances(clusters)
-#             if j==selected_cluster_indices:
-#                 r[iteration, j] = (delta) /(1 + np.abs(br[j]))
-#                 n[iteration, j] = n[iteration - 1, j] + (r[iteration, j] > 0).astype(int)                   
-#             else:
-#                 r[iteration, j] = ((delta) / ((1 + np.abs(br[j]))))+ beta*(del_acc)*(1+normalized_distance[selected_cluster_indices, j])
-#                 n[iteration, j] = n[iteration - 1, j]
-#             R[iteration, j] = np.sum(r[:, j]) / (n[iteration, j]+1)
-#             U[j] = R[iteration, j] + alpha * np.sqrt(2 * np.log(np.sum(n[iteration, :])+1) / ((n[iteration, j]) + 1))
-        
-#         cluster_count.append(selected_cluster_indices + 1)
-
-#         cluster_df = clusters[selected_cluster_indices]
-#         mini_batch_indices = list(mini_batch_indices)
-#         cluster_df = cluster_df.drop(cluster_df.index[mini_batch_indices])
-#         clusters[selected_cluster_indices] = cluster_df
-
-#         i_values_stat.append(iteration)
-#         stat.append(after)
-
-#         iteration_time = time.time() - start_time
-#         iteration_time1+=iteration_time
-        
-
-        
-    
-#     return (Ttrain_updated, i_values_stat, i_values_ex_stat, stat_ex, stat, acc_stat, 
-#             time_per_iteration_stat, cluster_count, iteration_time1)
-
+    poly = PolynomialFeatures(degree=degree)
+    X_train_poly = poly.fit_transform(X_train_inf)
+    X_test_poly = poly.transform(X_test_inf)
+
+    model_ridge = Ridge(alpha=alpha)
+    model_ridge.fit(X_train_poly, y_train_inf)
+
+    y_pred = model_ridge.predict(X_test_poly)
+
+    r2_ridge = r2_score(y_test_inf, y_pred)
+    print(f"Ridge R-squared (R²): {r2_ridge}")
+    return model_ridge, X_test_poly, y_test_inf
+
+def sorted_influences_reg(test_df, model):
+    sc = StandardScaler()
+    test_df_scale=sc.fit_transform(test_df)
+    poly = PolynomialFeatures(degree=2)
+    test_poly=poly.fit_transform(test_df_scale)
+
+    estimate_test_influence= model.predict(test_poly)
+    test_data_array = test_df.to_numpy()
+
+    test_data_with_influence = pd.DataFrame(test_data_array, columns=test_df.columns)
+    test_data_with_influence['influence'] = estimate_test_influence
+    sorted_cluster_data = test_data_with_influence.sort_values(by='influence', ascending=False).reset_index(drop=True)
+    sorted_cluster_data_array = sorted_cluster_data.drop(columns=['influence'])
+    sorted_influences = sorted_cluster_data['influence']
+
+    return sorted_cluster_data_array, sorted_influences
+
+def generate_synthetic_data(datapool, n):
+    synthetic_data = datapool.sample(n=n, replace=True, random_state=42)
+    return synthetic_data
