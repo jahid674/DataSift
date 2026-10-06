@@ -47,10 +47,8 @@ also work from the notebook directory.
 | --- | --- | --- |
 | Development | `python -m pip install -e '.[dev]'` | Regression tests and package builds |
 | Notebooks | `python -m pip install -e '.[notebooks]'` | JupyterLab and plotting |
-| SliceTuner | `python -m pip install -e '.[slicetuner]'` | TensorFlow and CVXPY comparison baseline |
 
-Equivalent requirements files are provided for each extra. TensorFlow is optional
-and is not imported by the main DataSift package.
+Equivalent requirements files are provided for each extra.
 
 ## Quick start
 
@@ -146,7 +144,6 @@ datasift/                 Main Python package
   utils.py               Loss functions and tensor utilities
 examples/quickstart.py    Supported offline example
 notebooks/               Exploratory research and plotting notebooks
-SliceTuner/              Optional comparison baseline
 data/                    Dataset documentation and bundled UCI inputs
 docs/                    Algorithm contracts and publication assets
 tests/                   Differential regression tests and original reference

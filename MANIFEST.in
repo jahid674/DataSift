@@ -5,4 +5,3 @@ prune tests
 prune data
 prune docs
 prune notebooks
-prune SliceTuner/archive
