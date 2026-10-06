@@ -1,0 +1,30 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+.DS_Store
+
+# Local configuration and experiment artifacts
+.env
+.env.*
+!.env.example
+.aws/
+outputs/
+*.log
+
+# Downloaded datasets; retain the small, documented UCI inputs.
+data/*/
+!data/raw/
+data/raw/*
+!data/raw/adult.data
+!data/raw/adult.test
+!data/raw/german.data

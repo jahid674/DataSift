@@ -14,15 +14,27 @@ from sklearn.svm import SVC
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from fc import FC  # your FC that returns: loss_list, pos_rate_list, pos_count_list, count_list, process_num
+if __package__:
+    from .fc import FC
+else:
+    from fc import FC
 
 
 class System_T:
-    def __init__(self, train, val, val_data_dict, data_num_array, num_class, num_label,
-                 slice_index, add_data_dict,
-                 favorable_label=1,
-                 privileged_slice_indices=None,
-                 protected_slice_indices=None):
+    def __init__(
+        self,
+        train,
+        val,
+        val_data_dict,
+        data_num_array,
+        num_class,
+        num_label,
+        slice_index,
+        add_data_dict,
+        favorable_label=1,
+        privileged_slice_indices=None,
+        protected_slice_indices=None,
+    ):
         """
         Args:
             train: (X_train, y_train_onehot)
@@ -38,23 +50,45 @@ class System_T:
             protected_slice_indices: list of slice indices belonging to the protected group
         """
         self.train = (copy.deepcopy(train[0]), copy.deepcopy(train[1]))
-        self.val   = (copy.deepcopy(val[0]),   copy.deepcopy(val[1]))
-        self.val_data_dict  = copy.deepcopy(val_data_dict)
+        self.val = (copy.deepcopy(val[0]), copy.deepcopy(val[1]))
+        self.val_data_dict = copy.deepcopy(val_data_dict)
         self.data_num_array = np.array(copy.deepcopy(data_num_array)).astype(int)
-        self.add_data_dict  = copy.deepcopy(add_data_dict)
-        self.num_class  = int(num_class)
-        self.num_label  = int(num_label)
+        self.add_data_dict = copy.deepcopy(add_data_dict)
+        self.num_class = int(num_class)
+        self.num_label = int(num_label)
         self.slice_index = copy.deepcopy(slice_index)
 
         # fairness settings (used for final evaluation)
         self.favorable_label = int(favorable_label)
-        self.privileged_slice_indices = [] if privileged_slice_indices is None else [int(i) for i in privileged_slice_indices]
-        self.protected_slice_indices  = [] if protected_slice_indices  is None else [int(i) for i in protected_slice_indices]
+        self.privileged_slice_indices = (
+            []
+            if privileged_slice_indices is None
+            else [int(i) for i in privileged_slice_indices]
+        )
+        self.protected_slice_indices = (
+            []
+            if protected_slice_indices is None
+            else [int(i) for i in protected_slice_indices]
+        )
 
-    def selective_collect(self, budget, k, batch_size, lr, epochs, cost_func,
-                          Lambda, num_iter, slice_desc, strategy="one-shot", show_figure=False,
-                          # NEW: external model options
-                          ext_model_type="logreg", ext_C=1.0, ext_kernel="rbf"):
+    def selective_collect(
+        self,
+        budget,
+        k,
+        batch_size,
+        lr,
+        epochs,
+        cost_func,
+        Lambda,
+        num_iter,
+        slice_desc,
+        strategy="one-shot",
+        show_figure=False,
+        # NEW: external model options
+        ext_model_type="logreg",
+        ext_C=1.0,
+        ext_kernel="rbf",
+    ):
         """
         Selective data collection (Slice Tuner). After collection, trains an external
         Logistic Regression / SVM and reports accuracy + statistical parity (prot - priv).
@@ -74,7 +108,9 @@ class System_T:
 
         # subset sizes for learning-curve fitting (same for all slices)
         initial_k = 100
-        num_k_ = initial_k + np.arange(0, k) * (len(self.train[0]) - initial_k) / max(1, (k - 1))
+        num_k_ = initial_k + np.arange(0, k) * (len(self.train[0]) - initial_k) / max(
+            1, (k - 1)
+        )
         num_k = [int(i) for i in num_k_]
 
         iteration = 0
@@ -93,8 +129,16 @@ class System_T:
             # imbalance-limited step (if not one-shot)
             if strategy != "one-shot" and abs(after_IR - IR) > self.T:
                 target_ratio = IR + self.T * np.sign(after_IR - IR)
-                change_ratio = self.get_change_ratio(self.data_num_array, num_examples, target_ratio)
-                num_examples = np.array([int(num_examples[i] * change_ratio) for i in range(self.num_class)], dtype=int)
+                change_ratio = self.get_change_ratio(
+                    self.data_num_array, num_examples, target_ratio
+                )
+                num_examples = np.array(
+                    [
+                        int(num_examples[i] * change_ratio)
+                        for i in range(self.num_class)
+                    ],
+                    dtype=int,
+                )
                 after_IR = self.get_imbalance_ratio(self.data_num_array + num_examples)
 
             # spend budget, update sizes
@@ -119,31 +163,54 @@ class System_T:
                 print("\n======= Performance (FC summary) =======")
                 print(total_num_examples.astype(int))
                 print(f"Number of iteration: {iteration}")
-                print(f"Strategy: {strategy}, Lambda: {self.Lambda}, Initial Budget: {budget}")
+                print(
+                    f"Strategy: {strategy}, Lambda: {self.Lambda}, Initial Budget: {budget}"
+                )
 
-                (avg_loss, loss_std,
-                 avg_gap, std_gap,
-                 avg_priv, std_priv,
-                 avg_prot, std_prot) = self.show_performance()
+                (
+                    avg_loss,
+                    loss_std,
+                    avg_gap,
+                    std_gap,
+                    avg_priv,
+                    std_priv,
+                    avg_prot,
+                    std_prot,
+                ) = self.show_performance()
 
-                print("FC Loss: %.5f (%.5f)\n"
-                      "FC Group Disparity (prot - priv): %.5f (%.5f)\n"
-                      "FC Priv positive rate: %.5f (%.5f)\n"
-                      "FC Prot positive rate: %.5f (%.5f)\n" %
-                      (avg_loss, loss_std, avg_gap, std_gap, avg_priv, std_priv, avg_prot, std_prot))
+                print(
+                    "FC Loss: %.5f (%.5f)\n"
+                    "FC Group Disparity (prot - priv): %.5f (%.5f)\n"
+                    "FC Priv positive rate: %.5f (%.5f)\n"
+                    "FC Prot positive rate: %.5f (%.5f)\n"
+                    % (
+                        avg_loss,
+                        loss_std,
+                        avg_gap,
+                        std_gap,
+                        avg_priv,
+                        std_priv,
+                        avg_prot,
+                        std_prot,
+                    )
+                )
 
                 # === NEW: external model (LogReg / SVM) on collected train ===
                 acc, sp_gap = self.evaluate_sklearn(
                     model_type=ext_model_type, C=ext_C, kernel=ext_kernel
                 )
                 print("\n======= External Model Evaluation =======")
-                print(f"Model: {ext_model_type} (C={ext_C}{', kernel='+ext_kernel if ext_model_type=='svm' else ''})")
+                print(
+                    f"Model: {ext_model_type} (C={ext_C}{', kernel=' + ext_kernel if ext_model_type == 'svm' else ''})"
+                )
                 print(f"Accuracy (val): {acc:.4f}")
                 print(f"Statistical Parity (prot - priv): {sp_gap:.5f}")
                 break
             else:
                 # re-fit curves on updated train
-                num_k_ = initial_k + np.arange(0, k) * (len(self.train[0]) - initial_k) / max(1, (k - 1))
+                num_k_ = initial_k + np.arange(0, k) * (
+                    len(self.train[0]) - initial_k
+                ) / max(1, (k - 1))
                 num_k = [int(i) for i in num_k_]
                 self.train_on_subsets(num_k, num_iter)
 
@@ -165,14 +232,19 @@ class System_T:
             self.slice_num.append([0] * len(num_k))
 
         for rep in range(num_iter):
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                jobs = [executor.submit(self.fc_training, num_k, kk) for kk in range(len(num_k))]
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=max_workers
+            ) as executor:
+                jobs = [
+                    executor.submit(self.fc_training, num_k, kk)
+                    for kk in range(len(num_k))
+                ]
                 for job in concurrent.futures.as_completed(jobs):
                     if job.cancelled():
                         continue
                     loss_list, _, _, _, process_num = job.result()
                     for j in range(self.num_class):
-                        self.loss_output[j][process_num] += (loss_list[j] / num_iter)
+                        self.loss_output[j][process_num] += loss_list[j] / num_iter
                         if rep == 0:
                             self.slice_num[j][process_num] = int(num_k[process_num])
 
@@ -187,14 +259,18 @@ class System_T:
         self.prot_rate_runs = []
 
         max_workers = max(1, int(num_iter))
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=max_workers
+        ) as executor:
             jobs = [executor.submit(self.fc_training_full, i) for i in range(num_iter)]
             for job in concurrent.futures.as_completed(jobs):
                 if job.cancelled():
                     continue
                 loss_list, pos_rate_list, pos_count_list, count_list, _ = job.result()
                 self.total_loss.append(float(np.average(loss_list)))
-                gap, priv_rate, prot_rate = self._disparity_from_counts(pos_count_list, count_list)
+                gap, priv_rate, prot_rate = self._disparity_from_counts(
+                    pos_count_list, count_list
+                )
                 if gap is not None:
                     self.group_disparity_runs.append(gap)
                     self.priv_rate_runs.append(priv_rate)
@@ -204,21 +280,37 @@ class System_T:
             self.total_loss = [0.0]
 
     def fc_training(self, num_k, k):
-        net = FC(self.train[0][:num_k[k]], self.train[1][:num_k[k]],
-                 self.val[0], self.val[1], self.val_data_dict,
-                 self.batch_size, epochs=self.epochs, lr=self.lr,
-                 num_class=self.num_class, num_label=self.num_label,
-                 slice_index=self.slice_index,
-                 favorable_label=self.favorable_label)
+        net = FC(
+            self.train[0][: num_k[k]],
+            self.train[1][: num_k[k]],
+            self.val[0],
+            self.val[1],
+            self.val_data_dict,
+            self.batch_size,
+            epochs=self.epochs,
+            lr=self.lr,
+            num_class=self.num_class,
+            num_label=self.num_label,
+            slice_index=self.slice_index,
+            favorable_label=self.favorable_label,
+        )
         return net.fc_train(k)
 
     def fc_training_full(self, process_num):
-        net = FC(self.train[0], self.train[1],
-                 self.val[0], self.val[1], self.val_data_dict,
-                 self.batch_size, epochs=self.epochs, lr=self.lr,
-                 num_class=self.num_class, num_label=self.num_label,
-                 slice_index=self.slice_index,
-                 favorable_label=self.favorable_label)
+        net = FC(
+            self.train[0],
+            self.train[1],
+            self.val[0],
+            self.val[1],
+            self.val_data_dict,
+            self.batch_size,
+            epochs=self.epochs,
+            lr=self.lr,
+            num_class=self.num_class,
+            num_label=self.num_label,
+            slice_index=self.slice_index,
+            favorable_label=self.favorable_label,
+        )
         return net.fc_train(process_num)
 
     # --------------------------
@@ -259,13 +351,15 @@ class System_T:
         for i in range(self.num_class):
             xdata_dense = np.linspace(self.slice_num[i][0], self.slice_num[i][-1], 1000)
             sigma = weight_list(self.slice_num[i])
-            popt, _ = curve_fit(power_law,
-                                xdata=np.array(self.slice_num[i], dtype=float),
-                                ydata=np.array(self.loss_output[i], dtype=float),
-                                sigma=np.array(sigma, dtype=float),
-                                absolute_sigma=True,
-                                bounds=(0, [np.inf, np.inf]),
-                                maxfev=5000)
+            popt, _ = curve_fit(
+                power_law,
+                xdata=np.array(self.slice_num[i], dtype=float),
+                ydata=np.array(self.loss_output[i], dtype=float),
+                sigma=np.array(sigma, dtype=float),
+                absolute_sigma=True,
+                bounds=(0, [np.inf, np.inf]),
+                maxfev=5000,
+            )
             a_hat, b_hat = popt[0], popt[1]
             A.append(-a_hat)  # sign convention as in your original
             B.append(b_hat)
@@ -273,13 +367,24 @@ class System_T:
 
             if show_figure:
                 plt.figure(1, figsize=(12, 8))
-                plt.plot(self.slice_num[i], self.loss_output[i], 'o-', linewidth=1.0, markersize=4, label=slice_desc[i])
-                plt.plot(xdata_dense, power_law(xdata_dense, *popt), linewidth=2.0,
-                         label=r"$y={%.3f}x^{-%.3f}$" % (b_hat, a_hat))
+                plt.plot(
+                    self.slice_num[i],
+                    self.loss_output[i],
+                    "o-",
+                    linewidth=1.0,
+                    markersize=4,
+                    label=slice_desc[i],
+                )
+                plt.plot(
+                    xdata_dense,
+                    power_law(xdata_dense, *popt),
+                    linewidth=2.0,
+                    label=r"$y={%.3f}x^{-%.3f}$" % (b_hat, a_hat),
+                )
                 plt.tick_params(labelsize=20)
-                plt.xlabel('Number of training examples', fontsize=25)
-                plt.ylabel('Validation Loss', fontsize=25)
-                plt.legend(prop={'size': 20})
+                plt.xlabel("Number of training examples", fontsize=25)
+                plt.ylabel("Validation Loss", fontsize=25)
+                plt.legend(prop={"size": 20})
                 plt.tight_layout()
                 plt.show()
 
@@ -294,7 +399,10 @@ class System_T:
                 counter_loss = cp.sum(estimate_loss) / float(self.num_class)
                 ob_func += loss + self.Lambda * cp.maximum(0, (loss / counter_loss) - 1)
 
-            constraints = [cp.sum(cp.multiply(x, self.cost_func)) == self.budget, x >= 0]
+            constraints = [
+                cp.sum(cp.multiply(x, self.cost_func)) == self.budget,
+                x >= 0,
+            ]
             prob = cp.Problem(cp.Minimize(ob_func), constraints)
             prob.solve(solver="ECOS_BB")
         except Exception:
@@ -305,7 +413,10 @@ class System_T:
                 counter_loss = cp.sum(estimate_loss) / float(self.num_class)
                 ob_func += loss + self.Lambda * cp.maximum(0, (loss / counter_loss) - 1)
 
-            constraints = [cp.sum(cp.multiply(x, self.cost_func)) == self.budget, x >= 0]
+            constraints = [
+                cp.sum(cp.multiply(x, self.cost_func)) == self.budget,
+                x >= 0,
+            ]
             prob = cp.Problem(cp.Minimize(ob_func), constraints)
             prob.solve(solver="ECOS_BB")
 
@@ -331,18 +442,27 @@ class System_T:
             new_sizes = [int(add[i] * x) + int(num[i]) for i in range(self.num_class)]
             return max(new_sizes) - target * min(new_sizes)
 
-        ratio = scipy.optimize.fsolve(F, x0=0.5, args=(self.data_num_array, num_examples, target_ratio))
+        ratio = scipy.optimize.fsolve(
+            F, x0=0.5, args=(self.data_num_array, num_examples, target_ratio)
+        )
         if ratio > 1:
-            ratio = scipy.optimize.fsolve(F, x0=0.25, args=(self.data_num_array, num_examples, target_ratio))
+            ratio = scipy.optimize.fsolve(
+                F, x0=0.25, args=(self.data_num_array, num_examples, target_ratio)
+            )
         elif ratio < 0:
-            ratio = scipy.optimize.fsolve(F, x0=0.75, args=(self.data_num_array, num_examples, target_ratio))
+            ratio = scipy.optimize.fsolve(
+                F, x0=0.75, args=(self.data_num_array, num_examples, target_ratio)
+            )
         return float(ratio)
 
     # --------------------------
     # Disparity computation
     # --------------------------
     def _disparity_from_counts(self, pos_count_list, count_list):
-        if len(self.privileged_slice_indices) == 0 or len(self.protected_slice_indices) == 0:
+        if (
+            len(self.privileged_slice_indices) == 0
+            or len(self.protected_slice_indices) == 0
+        ):
             return None, None, None
 
         pos = np.array(pos_count_list, dtype=float)
@@ -359,15 +479,37 @@ class System_T:
         return gap, priv_rate, prot_rate
 
     def show_performance(self):
-        loss_arr = np.array(self.total_loss, dtype=float) if len(self.total_loss) else np.array([0.0])
-        gap_arr  = np.array(self.group_disparity_runs, dtype=float) if len(self.group_disparity_runs) else np.array([0.0])
-        priv_arr = np.array(self.priv_rate_runs, dtype=float) if len(self.priv_rate_runs) else np.array([0.0])
-        prot_arr = np.array(self.prot_rate_runs, dtype=float) if len(self.prot_rate_runs) else np.array([0.0])
+        loss_arr = (
+            np.array(self.total_loss, dtype=float)
+            if len(self.total_loss)
+            else np.array([0.0])
+        )
+        gap_arr = (
+            np.array(self.group_disparity_runs, dtype=float)
+            if len(self.group_disparity_runs)
+            else np.array([0.0])
+        )
+        priv_arr = (
+            np.array(self.priv_rate_runs, dtype=float)
+            if len(self.priv_rate_runs)
+            else np.array([0.0])
+        )
+        prot_arr = (
+            np.array(self.prot_rate_runs, dtype=float)
+            if len(self.prot_rate_runs)
+            else np.array([0.0])
+        )
 
-        return (float(np.mean(loss_arr)), float(np.std(loss_arr)),
-                float(np.mean(gap_arr)),  float(np.std(gap_arr)),
-                float(np.mean(priv_arr)), float(np.std(priv_arr)),
-                float(np.mean(prot_arr)), float(np.std(prot_arr)))
+        return (
+            float(np.mean(loss_arr)),
+            float(np.std(loss_arr)),
+            float(np.mean(gap_arr)),
+            float(np.std(gap_arr)),
+            float(np.mean(priv_arr)),
+            float(np.std(priv_arr)),
+            float(np.mean(prot_arr)),
+            float(np.std(prot_arr)),
+        )
 
     # ==========================
     # NEW: External model eval
@@ -383,19 +525,19 @@ class System_T:
         Xtr = self.train[0]
         ytr = np.argmax(self.train[1], axis=1)  # back to labels
 
-        Xv  = self.val[0]
-        yv  = np.argmax(self.val[1], axis=1)
+        Xv = self.val[0]
+        yv = np.argmax(self.val[1], axis=1)
 
         # Model
         if model_type.lower() == "logreg":
             clf = make_pipeline(
                 StandardScaler(with_mean=False),
-                LogisticRegression(C=float(C), max_iter=1000, n_jobs=None)
+                LogisticRegression(C=float(C), max_iter=1000, n_jobs=None),
             )
         elif model_type.lower() == "svm":
             clf = make_pipeline(
                 StandardScaler(with_mean=False),
-                SVC(C=float(C), kernel=kernel, probability=False)
+                SVC(C=float(C), kernel=kernel, probability=False),
             )
         else:
             raise ValueError("model_type must be 'logreg' or 'svm'")
@@ -420,7 +562,7 @@ class System_T:
                 continue
             ypred_i = clf.predict(Xi)
             pos_i = int(np.sum(ypred_i == self.favorable_label))
-            n_i   = int(len(Xi))
+            n_i = int(len(Xi))
 
             if i in self.privileged_slice_indices:
                 priv_pos += pos_i

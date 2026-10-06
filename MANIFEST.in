@@ -1,0 +1,8 @@
+include requirements.txt
+include CITATION.cff
+recursive-include datasift *.json
+prune tests
+prune data
+prune docs
+prune notebooks
+prune SliceTuner/archive

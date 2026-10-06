@@ -5,11 +5,17 @@ from typing import List, Tuple, Dict, Optional, Union
 import numpy as np
 import tensorflow as tf
 
-from baseline import Baseline         # <-- your saved Baseline
-from system_t import System_T         # <-- your saved System_T
+if __package__:
+    from .baseline import Baseline
+    from .system_t import System_T
+else:
+    from baseline import Baseline
+    from system_t import System_T
 
 
-SliceSpec = Union[int, Tuple[int, int]]  # single-indicator column or (col_a, col_b) intersection
+SliceSpec = Union[
+    int, Tuple[int, int]
+]  # single-indicator column or (col_a, col_b) intersection
 
 
 class SliceTunerRunner:
@@ -35,47 +41,63 @@ class SliceTunerRunner:
         self,
         X_train: np.ndarray,
         y_train: np.ndarray,
-        X_val:   np.ndarray,
-        y_val:   np.ndarray,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
         val_data_dict: Dict[int, Tuple[np.ndarray, np.ndarray]],
         add_data_dict: Dict[int, Tuple[np.ndarray, np.ndarray]],
-        slice_index:   List[SliceSpec],
-        slice_desc:    Optional[List[str]] = None,
+        slice_index: List[SliceSpec],
+        slice_desc: Optional[List[str]] = None,
         privileged_slice_indices: Optional[List[int]] = None,
-        protected_slice_indices:  Optional[List[int]] = None,
+        protected_slice_indices: Optional[List[int]] = None,
         favorable_label: int = 1,
     ):
         # --- store raw arrays ---
         self.X_train = np.asarray(X_train)
         self.y_train_raw = np.asarray(y_train)
-        self.X_val   = np.asarray(X_val)
-        self.y_val_raw   = np.asarray(y_val)
+        self.X_val = np.asarray(X_val)
+        self.y_val_raw = np.asarray(y_val)
 
         # per-slice dicts
-        self.val_data_dict  = {int(k): (np.asarray(v[0]), np.asarray(v[1])) for k, v in val_data_dict.items()}
-        self.add_data_dict  = {int(k): (np.asarray(v[0]), np.asarray(v[1])) for k, v in add_data_dict.items()}
+        self.val_data_dict = {
+            int(k): (np.asarray(v[0]), np.asarray(v[1]))
+            for k, v in val_data_dict.items()
+        }
+        self.add_data_dict = {
+            int(k): (np.asarray(v[0]), np.asarray(v[1]))
+            for k, v in add_data_dict.items()
+        }
 
         # slices
         self.slice_index = list(slice_index)
-        self.slice_desc  = list(slice_desc) if slice_desc is not None else [f"slice_{i}" for i in range(len(slice_index))]
-        assert len(self.slice_index) == len(self.slice_desc), "slice_index and slice_desc must align"
+        self.slice_desc = (
+            list(slice_desc)
+            if slice_desc is not None
+            else [f"slice_{i}" for i in range(len(slice_index))]
+        )
+        assert len(self.slice_index) == len(self.slice_desc), (
+            "slice_index and slice_desc must align"
+        )
 
         self.num_class = len(self.slice_index)
 
         # fairness config
         self.favorable_label = int(favorable_label)
         self.privileged_slice_indices = list(privileged_slice_indices or [])
-        self.protected_slice_indices  = list(protected_slice_indices or [])
+        self.protected_slice_indices = list(protected_slice_indices or [])
 
         # --- normalize labels to one-hot everywhere with consistent num_label ---
-        self.num_label, self.Y_train, self.Y_val = self._normalize_labels(self.y_train_raw, self.y_val_raw)
+        self.num_label, self.Y_train, self.Y_val = self._normalize_labels(
+            self.y_train_raw, self.y_val_raw
+        )
 
         # fix per-slice dict label widths
         self._normalize_dict_labels(self.val_data_dict, self.num_label)
         self._normalize_dict_labels(self.add_data_dict, self.num_label)
 
         # --- compute initial_data_array from X_train + slice_index ---
-        self.initial_data_array = self._count_per_slice(self.X_train, self.slice_index).astype(int)
+        self.initial_data_array = self._count_per_slice(
+            self.X_train, self.slice_index
+        ).astype(int)
 
     # ---------------------- public API ----------------------
 
@@ -94,7 +116,7 @@ class SliceTunerRunner:
         """
         bl = Baseline(
             (self.X_train, self.Y_train),
-            (self.X_val,   self.Y_val),
+            (self.X_val, self.Y_val),
             self.val_data_dict,
             self.initial_data_array,
             self.num_class,
@@ -104,7 +126,7 @@ class SliceTunerRunner:
             method=method,
             favorable_label=self.favorable_label,
             privileged_slice_indices=self.privileged_slice_indices,
-            protected_slice_indices=self.protected_slice_indices
+            protected_slice_indices=self.protected_slice_indices,
         )
         bl.performance(
             budget=int(budget),
@@ -112,7 +134,7 @@ class SliceTunerRunner:
             num_iter=int(num_iter),
             batch_size=int(batch_size),
             lr=float(lr),
-            epochs=int(epochs)
+            epochs=int(epochs),
         )
         return bl
 
@@ -134,7 +156,7 @@ class SliceTunerRunner:
         """
         st = System_T(
             (self.X_train, self.Y_train),
-            (self.X_val,   self.Y_val),
+            (self.X_val, self.Y_val),
             self.val_data_dict,
             self.initial_data_array,
             self.num_class,
@@ -143,7 +165,7 @@ class SliceTunerRunner:
             self.add_data_dict,
             favorable_label=self.favorable_label,
             privileged_slice_indices=self.privileged_slice_indices,
-            protected_slice_indices=self.protected_slice_indices
+            protected_slice_indices=self.protected_slice_indices,
         )
         st.selective_collect(
             budget=int(budget),
@@ -156,7 +178,7 @@ class SliceTunerRunner:
             num_iter=int(num_iter),
             slice_desc=self.slice_desc,
             strategy=str(strategy),
-            show_figure=bool(show_figure)
+            show_figure=bool(show_figure),
         )
         return st
 
@@ -175,41 +197,51 @@ class SliceTunerRunner:
 
         # to one-hot
         if y_train_raw.ndim == 1:
-            Y_train = tf.keras.utils.to_categorical(y_train_raw.astype(int), num_classes=num_label)
+            Y_train = tf.keras.utils.to_categorical(
+                y_train_raw.astype(int), num_classes=num_label
+            )
         else:
             Y_train = y_train_raw
 
         if y_val_raw.ndim == 1:
-            Y_val = tf.keras.utils.to_categorical(y_val_raw.astype(int), num_classes=num_label)
+            Y_val = tf.keras.utils.to_categorical(
+                y_val_raw.astype(int), num_classes=num_label
+            )
         else:
             Y_val = y_val_raw
 
         # shape checks
         assert Y_train.shape[1] == num_label, "train one-hot width mismatch"
-        assert Y_val.shape[1]   == num_label, "val one-hot width mismatch"
+        assert Y_val.shape[1] == num_label, "val one-hot width mismatch"
         return num_label, Y_train, Y_val
 
-    def _normalize_dict_labels(self, data_dict: Dict[int, Tuple[np.ndarray, np.ndarray]], num_label: int):
+    def _normalize_dict_labels(
+        self, data_dict: Dict[int, Tuple[np.ndarray, np.ndarray]], num_label: int
+    ):
         """
         Ensure per-slice dict labels are one-hot with consistent width.
         """
         for k in list(data_dict.keys()):
             Xk, yk = data_dict[k]
             if yk.ndim == 1:
-                yk = tf.keras.utils.to_categorical(yk.astype(int), num_classes=num_label)
+                yk = tf.keras.utils.to_categorical(
+                    yk.astype(int), num_classes=num_label
+                )
             else:
                 # If slice happens to miss a class, pad to num_label
                 if yk.shape[1] != num_label:
                     # pad or re-map if necessary (simple safe pad to right)
                     y_pad = np.zeros((yk.shape[0], num_label), dtype=yk.dtype)
-                    y_pad[:, :yk.shape[1]] = yk
+                    y_pad[:, : yk.shape[1]] = yk
                     yk = y_pad
             data_dict[k] = (Xk, yk)
 
         # sanity: number of slices should match
         assert len(data_dict) == self.num_class, "data_dict length must match num_class"
 
-    def _count_per_slice(self, X: np.ndarray, slice_index: List[SliceSpec]) -> np.ndarray:
+    def _count_per_slice(
+        self, X: np.ndarray, slice_index: List[SliceSpec]
+    ) -> np.ndarray:
         """
         Count training examples per slice from X using slice_index specs.
         Supports:

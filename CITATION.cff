@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use DataSift in research, please cite the EDBT 2026 paper below."
+type: software
+title: "DataSift: Selective Data Expansion for Model Performance"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/jahid674/DataSift"
+authors:
+  - family-names: Hasan
+    given-names: Jahid
+    affiliation: Purdue University
+  - family-names: Pradhan
+    given-names: Romila
+    affiliation: Purdue University
+preferred-citation:
+  type: conference-paper
+  title: "Selective Data Expansion for Model Performance"
+  authors:
+    - family-names: Hasan
+      given-names: Jahid
+    - family-names: Pradhan
+      given-names: Romila
+  year: 2026
+  conference:
+    name: "29th International Conference on Extending Database Technology (EDBT)"
+    city: Tampere
+    country: FI
+    date-start: 2026-03-24
+    date-end: 2026-03-27
+  collection-title: "Proceedings of the 29th International Conference on Extending Database Technology"
+  start: 488
+  end: 502
+  doi: "10.48786/edbt.2026.39"
+  url: "https://www.openproceedings.org/2026/conf/edbt/paper-146.pdf"

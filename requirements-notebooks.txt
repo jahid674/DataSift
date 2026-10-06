@@ -1,0 +1,4 @@
+-r requirements.txt
+jupyterlab>=4.2,<5
+ipykernel>=6.29,<7
+seaborn==0.13.2
